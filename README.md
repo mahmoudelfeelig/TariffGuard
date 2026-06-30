@@ -1,2 +1,332 @@
 # TariffGuard
-Serverless EV charging tariff validation and session audit system built with AWS Lambda, API Gateway, SQS, DynamoDB, EventBridge, CloudWatch, Terraform, Python, and React.
+
+TariffGuard is a compact serverless EV charging session validation and tariff audit system. It receives completed charging sessions, enforces idempotency, applies the correct historical tariff, calculates money with `Decimal`, flags suspicious sessions, stores auditable DynamoDB records, and exposes a dark operations dashboard.
+
+## Architecture
+
+```text
+React/Vite dashboard
+        |
+        v
+API Gateway HTTP API with CORS
+        |
+        v
+Lambda API handler ----> DynamoDB TariffGuardIdempotency
+        |                         |
+        |                         +-- conditional put prevents changed duplicates
+        v
+DynamoDB TariffGuardMain <---- Lambda validation worker <---- SQS validation queue
+        ^                                  |
+        |                                  v
+Lambda daily audit worker <--------- SQS dead-letter queue
+        ^
+        |
+EventBridge daily schedule
+```
+
+## Repository Walkthrough
+
+```text
+backend/                  Lambda application and automated tests
+  src/tariffguard/
+    handlers/             AWS entry points for API, SQS, and EventBridge
+    models/               Pydantic request and stored-result contracts
+    repositories/         DynamoDB and SQS access patterns
+    services/             Idempotency, pricing, validation, and overview logic
+    utils/                HTTP responses, structured logs, and ISO time helpers
+  tests/                  Focused unit and handler tests
+frontend/                 React operations application
+  src/api/                Typed HTTP client and API response contracts
+  src/components/         Shared status and state components
+  src/data/               Realistic mock fallback dataset
+  src/pages/              Overview, sessions, detail, tariffs, alerts, and audit
+infra/                    Terraform infrastructure grouped by AWS service
+scripts/                  Seeding, simulation, and Lambda packaging tools
+examples/                 Reusable API request payloads
+```
+
+### Request Flow Example
+
+A `POST /sessions` request for `sess_001` follows this path:
+
+```text
+API Gateway route
+  -> tariffguard.handlers.api.handler
+  -> SessionIngest Pydantic validation
+  -> conditional idempotency write for BER-CP-014#sess_001
+  -> PENDING_VALIDATION records in DynamoDB
+  -> SQS validation message
+  -> validation_worker Lambda
+  -> historical tariff lookup at the session startedAt timestamp
+  -> validation flags and Decimal price calculation
+  -> final DynamoDB session and charger records
+  -> alert records when medium/high flags exist
+  -> GET /overview response consumed by React
+```
+
+Submitting exactly the same normalized payload reaches the existing idempotency
+record and returns the existing session with `200`. Changing a field while
+keeping the same charger/session key returns `409`.
+
+### Backend Parts
+
+- `handlers/api.py` maps API Gateway HTTP API events to the documented routes.
+  For example, `POST /sessions` validates input, claims the idempotency key,
+  stores the pending record, and sends the SQS message.
+- `handlers/validation_worker.py` processes SQS records independently. A failed
+  message ID is returned in `batchItemFailures`, allowing successful records in
+  the same batch to remain complete.
+- `handlers/audit_worker.py` is invoked daily by EventBridge. It counts final
+  statuses, sums stored `Decimal` totals, and writes `AUDIT_DAY#<date>/SUMMARY`.
+- `models/session.py` defines ingest, validation flag, price breakdown, and
+  stored session contracts. DynamoDB numbers are loaded into `Decimal`, never
+  Python float, for pricing.
+- `services/validation.py` produces codes such as `METER_REVERSED`,
+  `EXCESSIVE_ENERGY`, and `SUSPICIOUS_AVERAGE_POWER`.
+- `services/pricing.py` applies energy, session, idle, and tax components and
+  only rounds display values at the final boundary.
+- `services/idempotency.py` creates the stable normalized SHA-256 payload hash.
+- `repositories/dynamodb_repo.py` owns every DynamoDB key pattern and SQS send.
+  Business services do not construct table keys directly.
+
+### Terraform Files
+
+- `provider.tf` pins Terraform and provider compatibility. The AWS provider uses
+  `aws_region`; `archive` creates the final Lambda ZIP; `null` runs packaging
+  when source or dependency hashes change.
+- `variables.tf` exposes region, environment, CORS origin, PITR, project name,
+  and the local Python executable. Use `python` on Windows and `python3` on
+  Linux.
+- `locals.tf` produces consistent names such as `tariffguard-dev-api`, defines
+  cross-platform build paths, and centralizes Lambda environment variables.
+- `dynamodb.tf` creates the composite-key main table, its tariff-listing GSI,
+  and the separate conditional-write idempotency table.
+- `sqs.tf` creates the validation queue and DLQ. `maxReceiveCount = 3` moves a
+  repeatedly failing session message to the DLQ.
+- `iam.tf` defines the Lambda trust policy and runtime permissions. Lambda can
+  write its log streams, use only the two TariffGuard tables/index, and access
+  only the validation queues. This role is for running functions, not for the
+  human or CI identity that executes Terraform.
+- `lambda.tf` runs `scripts/package_lambda.py`, packages Linux CPython 3.12
+  wheels even when Terraform runs on Windows, creates all three functions, and
+  connects SQS with `ReportBatchItemFailures`. The validation worker uses the
+  account concurrency pool instead of reserving capacity, which keeps deployment
+  compatible with new AWS accounts that have low Lambda concurrency quotas.
+- `api_gateway.tf` creates the HTTP API, exact routes, Lambda proxy integration,
+  default auto-deploy stage, CORS policy, and invoke permission.
+- `eventbridge.tf` schedules the audit Lambda once per day and grants
+  EventBridge permission to invoke it.
+- `cloudwatch.tf` explicitly creates all Lambda log groups with seven-day
+  retention.
+- `outputs.tf` exposes the API URL, main table name, and validation queue URL
+  needed during a demo.
+
+### Frontend Parts
+
+- `App.tsx` loads the dated overview and owns global loading, error, and retry
+  behavior. The application shell remains usable when the session list is empty.
+- `pages/OverviewPage.tsx` provides the shared responsive shell, navigation,
+  KPI cards, charts, recent sessions, CSV export, and auxiliary operational
+  views.
+- `pages/SessionsPage.tsx` filters the loaded sessions by free text and status.
+- `pages/SessionDetailPage.tsx` calls `GET /sessions/{sessionId}` and displays
+  the immutable input, validation flags, tariff snapshot, and price breakdown.
+- `pages/TariffsPage.tsx` calls the tariff list and version endpoints, then
+  renders the active version, previous-version comparison, and immutable
+  timeline.
+- `pages/AlertsPage.tsx` calls the dated alerts endpoint and groups records into
+  high, medium, and low severity work columns.
+- `pages/AuditPage.tsx` calls the daily audit endpoint and renders persisted
+  totals, revenue, pass rate, and outcome distribution.
+- `api/client.ts` switches between real HTTP requests and `mockData.ts` using
+  `VITE_API_BASE_URL` and `VITE_USE_MOCKS`.
+
+## AWS Services
+
+Terraform creates API Gateway HTTP API, three Python 3.12 Lambda functions, SQS with a dead-letter queue, DynamoDB main and idempotency tables, EventBridge daily audit scheduling, IAM policies, and CloudWatch log groups with 7-day retention.
+
+## Backend Decisions
+
+The backend uses direct Lambda handlers instead of FastAPI to keep the serverless path clear for interviews. Pydantic validates request bodies, `boto3` is the only AWS client dependency, and all money/energy calculations use `Decimal`. The validation worker returns `{"batchItemFailures": [...]}` so one bad SQS record does not fail the whole batch.
+
+Session ingestion uses `chargerId#sessionId` as the idempotency key and a stable SHA-256 hash of the normalized payload. A first submission writes to the idempotency table with `attribute_not_exists(idempotencyKey)`, stores a `PENDING_VALIDATION` session, enqueues SQS, and returns `202`. A duplicate with the same payload returns `200` and the existing session state. A duplicate with changed payload returns `409`.
+
+## DynamoDB Access Patterns
+
+Main table:
+
+```text
+Tariff version:         PK=TARIFF#{tariffId}       SK=VERSION#{validFrom}
+Session direct lookup:  PK=SESSION#{sessionId}     SK=METADATA
+Charger session list:   PK=CHARGER#{chargerId}     SK=SESSION#{startedAt}#{sessionId}
+Alert listing:          PK=ALERT_DAY#{yyyy-mm-dd}  SK=ALERT#{severity}#{sessionId}
+Audit summary:          PK=AUDIT_DAY#{yyyy-mm-dd}  SK=SUMMARY
+```
+
+The `GSI1` index lists tariff versions across tariff IDs. Tariff versions are append-only; sessions use the newest `validFrom` at or before `startedAt`.
+
+## Local Setup
+
+Prerequisites: Python 3.12, Node.js 20.19+, npm, Terraform 1.6+, AWS credentials for deployment.
+
+```bash
+cp .env.example .env
+make install
+make test
+make lint
+make frontend-build
+```
+
+`make install` creates `/tmp/tariffguard-venv` by default. Override it with `make install VENV=.venv` if you prefer an in-repo virtual environment.
+
+Run the dashboard with mock data:
+
+```bash
+VITE_USE_MOCKS=true make frontend-dev
+```
+
+## Deployment
+
+From a clean checkout:
+
+```bash
+make install
+cd infra
+terraform init
+terraform plan -out=tfplan -var='environment=demo' -var='cors_origin=http://localhost:5173'
+terraform apply tfplan
+terraform output api_base_url
+```
+
+Terraform calls the Python packager without Unix shell commands, so deployment
+works from PowerShell, Windows Command Prompt, Linux, and WSL. The packager
+copies TariffGuard source and downloads Linux x86-64 CPython 3.12 wheels for
+`boto3`, Pydantic, and their transitive dependencies before creating the ZIP.
+
+PowerShell:
+
+```powershell
+terraform plan -out=tfplan `
+  -var="environment=dev" `
+  -var="cors_origin=http://localhost:5173" `
+  -var="python_executable=python"
+terraform apply tfplan
+```
+
+Linux or WSL:
+
+```bash
+terraform plan -out=tfplan \
+  -var='environment=dev' \
+  -var='cors_origin=http://localhost:5173' \
+  -var='python_executable=python3'
+terraform apply tfplan
+```
+
+If an older apply failed at `null_resource.lambda_package` after creating some
+AWS resources, do not delete the Terraform state. Pull this fix, run
+`terraform plan` again with the same environment and CORS variables, and apply
+the new plan. Terraform will retain the resources already recorded in state and
+create the missing package, Lambdas, integrations, and remaining dependencies.
+
+For local smoke checks, `make build-backend` packages the same runtime dependency set from the virtualenv created by `make install` and writes `build/tariffguard-lambda.zip`.
+
+Useful variables:
+
+```bash
+terraform apply -var='environment=demo' -var='cors_origin=http://localhost:5173'
+```
+
+Destroy demo resources:
+
+```bash
+make destroy
+```
+
+## Seeding Demo Data
+
+```bash
+API_URL="$(cd infra && terraform output -raw api_base_url)"
+API_URL="$API_URL" make seed
+```
+
+The seed script creates a tariff and submits three sessions: one normal, one reversed meter rejection, and one suspicious average power flag.
+
+## API Examples
+
+```bash
+curl "$API_URL/health"
+
+curl -X POST "$API_URL/tariffs" \
+  -H 'content-type: application/json' \
+  -d '{"tariffId":"berlin_public_standard","currency":"EUR","validFrom":"2026-06-01T00:00:00Z","pricePerKwh":"0.49","sessionFee":"0.35","idleFeePerMinute":"0.10","idleGraceMinutes":15,"taxRate":"0.19"}'
+
+curl "$API_URL/tariffs"
+curl "$API_URL/tariffs/berlin_public_standard/versions"
+
+curl -X POST "$API_URL/sessions" \
+  -H 'content-type: application/json' \
+  -d @examples/session.json
+
+curl "$API_URL/sessions/sess_001"
+curl "$API_URL/chargers/BER-CP-014/sessions"
+curl "$API_URL/alerts?date=2026-06-30"
+curl "$API_URL/audit/daily?date=2026-06-30"
+curl "$API_URL/overview?date=2026-06-30"
+```
+
+Duplicate behavior:
+
+```bash
+# Same payload: 200 with existing state.
+curl -i -X POST "$API_URL/sessions" -H 'content-type: application/json' -d @examples/session.json
+
+# Same chargerId/sessionId with changed payload: 409.
+curl -i -X POST "$API_URL/sessions" -H 'content-type: application/json' -d @examples/changed-session.json
+```
+
+`POST /dev/seed` exists only when `ENVIRONMENT` is not `production`.
+
+## Frontend Setup
+
+Use mock data:
+
+```bash
+VITE_USE_MOCKS=true make frontend-dev
+```
+
+Use the deployed API:
+
+```bash
+VITE_API_BASE_URL="$API_URL" make frontend-dev
+```
+
+The dashboard includes loading, empty, and error states. The main overview matches the requested dark sidebar layout with KPI cards, a validation line chart, an alert donut chart, and a recent sessions table.
+
+The sidebar views are functional:
+
+- Sessions: search, status filtering, and session detail navigation.
+- Session detail: price components, tariff snapshot, validation flags, raw input.
+- Tariffs: catalog, current rates, version comparison, immutable timeline.
+- Alerts: severity-grouped operator board linked back to session detail.
+- Audit: daily totals, pass rate, estimated revenue, outcome distribution.
+
+## Cost Notes
+
+This demo uses pay-per-request DynamoDB, Lambda, API Gateway HTTP API, SQS, and short CloudWatch log retention. At interview/demo traffic levels it should stay inside low-cost or free-tier usage for most AWS accounts. Delete resources with `make destroy` when finished.
+
+## Interview Demo Path
+
+You can demo the project in under five minutes:
+
+```bash
+make test
+make frontend-build
+cd infra && terraform apply
+API_URL="$(terraform output -raw api_base_url)"
+cd ..
+API_URL="$API_URL" make seed
+VITE_API_BASE_URL="$API_URL" make frontend-dev
+```
+
+Talk through the conditional idempotency write, append-only tariff versions, Decimal pricing, worker partial batch failure response, DLQ redrive policy, and DynamoDB keys. Then show `sess_reversed` becoming `REJECTED` and `sess_power` becoming `FLAGGED` after the worker processes SQS.
