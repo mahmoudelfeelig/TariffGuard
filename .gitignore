@@ -149,6 +149,8 @@ activemq-data/
 
 # Environments
 .env
+.env.*
+!.env.example
 .envrc
 .venv
 env/
@@ -216,3 +218,15 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# TariffGuard
+node_modules/
+frontend/dist/
+frontend/tsconfig.tsbuildinfo
+build/
+.terraform/
+.terraform-build/
+*.tfstate
+*.tfstate.*
+tfplan
+*.tfplan
