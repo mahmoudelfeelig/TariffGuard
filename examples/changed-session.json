@@ -1,0 +1,11 @@
+{
+  "sessionId": "sess_001",
+  "chargerId": "BER-CP-014",
+  "userId": "user_928",
+  "startedAt": "2026-06-30T08:10:00Z",
+  "stoppedAt": "2026-06-30T09:25:00Z",
+  "meterStartKwh": "1210.4",
+  "meterStopKwh": "1243.9",
+  "idleMinutes": 20,
+  "tariffId": "berlin_public_standard"
+}
