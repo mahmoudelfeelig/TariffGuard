@@ -54,11 +54,14 @@ SESSIONS = [
 ]
 
 
-def post(api_url: str, path: str, payload: dict) -> tuple[int, str]:
+def post(api_url: str, path: str, payload: dict, access_token: str | None = None) -> tuple[int, str]:
+    headers = {"content-type": "application/json"}
+    if access_token:
+        headers["authorization"] = f"Bearer {access_token}"
     request = Request(
         f"{api_url.rstrip('/')}{path}",
         data=json.dumps(payload).encode("utf-8"),
-        headers={"content-type": "application/json"},
+        headers=headers,
         method="POST",
     )
     try:
@@ -71,13 +74,14 @@ def post(api_url: str, path: str, payload: dict) -> tuple[int, str]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--api-url", required=True)
+    parser.add_argument("--access-token")
     args = parser.parse_args()
 
     print("Creating tariff")
-    print(post(args.api_url, "/tariffs", TARIFF))
+    print(post(args.api_url, "/tariffs", TARIFF, args.access_token))
     for session in SESSIONS:
         print(f"Submitting {session['sessionId']}")
-        print(post(args.api_url, "/sessions", session))
+        print(post(args.api_url, "/sessions", session, args.access_token))
 
 
 if __name__ == "__main__":

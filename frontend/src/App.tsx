@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
+import { LogIn, ShieldCheck } from "lucide-react";
+import type { User } from "oidc-client-ts";
 import type { Overview } from "./api/types";
 import { getOverview } from "./api/client";
+import { apiConfigured, authConfigured, authExpiredEvent, initializeAuth, signIn, signOut } from "./auth";
 import { OverviewPage } from "./pages/OverviewPage";
 
 function today() {
@@ -8,6 +11,9 @@ function today() {
 }
 
 export default function App() {
+  const [authLoading, setAuthLoading] = useState(apiConfigured);
+  const [user, setUser] = useState<User | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
   const [date, setDate] = useState(today());
   const [overview, setOverview] = useState<Overview | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -15,6 +21,29 @@ export default function App() {
   const [requestId, setRequestId] = useState(0);
 
   useEffect(() => {
+    if (!apiConfigured) return;
+    if (!authConfigured) {
+      setAuthError("The API is configured, but Cognito environment variables are missing.");
+      setAuthLoading(false);
+      return;
+    }
+    initializeAuth()
+      .then(setUser)
+      .catch((error: Error) => setAuthError(error.message))
+      .finally(() => setAuthLoading(false));
+  }, []);
+
+  useEffect(() => {
+    const handleExpiredSession = () => setUser(null);
+    window.addEventListener(authExpiredEvent, handleExpiredSession);
+    return () => window.removeEventListener(authExpiredEvent, handleExpiredSession);
+  }, []);
+
+  useEffect(() => {
+    if (apiConfigured && !user) {
+      setLoading(false);
+      return;
+    }
     let active = true;
     setLoading(true);
     setError(null);
@@ -37,7 +66,17 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [date, requestId]);
+  }, [date, requestId, user]);
+
+  if (authLoading) {
+    return <StateFrame title="Restoring secure session" body="Validating the Cognito operator session." loading />;
+  }
+  if (authError) {
+    return <StateFrame title="Authentication unavailable" body={authError} tone="error" />;
+  }
+  if (apiConfigured && !user) {
+    return <LoginFrame onSignIn={() => signIn().catch((error: Error) => setAuthError(error.message))} />;
+  }
 
   if (loading) {
     return <StateFrame title="Loading dashboard" body="Fetching validation metrics and recent sessions." loading />;
@@ -48,7 +87,31 @@ export default function App() {
   if (!overview) {
     return <StateFrame title="No overview data" body="The API returned no dashboard payload." />;
   }
-  return <OverviewPage overview={overview} date={date} onDateChange={setDate} />;
+  return (
+    <OverviewPage
+      overview={overview}
+      date={date}
+      onDateChange={setDate}
+      operatorName={user?.profile.email ?? user?.profile.preferred_username ?? "Demo operator"}
+      onSignOut={apiConfigured ? () => signOut().catch((error: Error) => setAuthError(error.message)) : undefined}
+    />
+  );
+}
+
+function LoginFrame({ onSignIn }: { onSignIn: () => void }) {
+  return (
+    <main className="grid min-h-screen place-items-center bg-ink p-5 text-slate-100">
+      <section className="w-full max-w-md border border-line bg-panel p-7 shadow-panel">
+        <div className="flex items-center gap-3">
+          <span className="grid h-11 w-11 place-items-center rounded bg-mint/10 text-mint"><ShieldCheck size={22} /></span>
+          <div><p className="font-semibold">TariffGuard</p><p className="text-xs uppercase tracking-widest text-slate-500">Secure operations</p></div>
+        </div>
+        <h1 className="mt-10 text-2xl font-semibold">Operator sign in</h1>
+        <p className="mt-3 text-sm leading-6 text-slate-400">Continue to the AWS Cognito managed login to access tariff, session, alert, and audit data.</p>
+        <button onClick={onSignIn} className="mt-7 flex h-11 w-full items-center justify-center gap-2 rounded bg-mint text-sm font-semibold text-slate-950"><LogIn size={17} />Continue with Cognito</button>
+      </section>
+    </main>
+  );
 }
 
 function StateFrame({

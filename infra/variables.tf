@@ -33,3 +33,26 @@ variable "python_executable" {
   type        = string
   default     = "python"
 }
+
+variable "frontend_urls" {
+  description = "Allowed Cognito login callback and logout URLs. Include localhost and the production Cloudflare domain as needed."
+  type        = list(string)
+  default     = ["http://localhost:5173"]
+
+  validation {
+    condition     = length(var.frontend_urls) > 0
+    error_message = "At least one frontend URL is required."
+  }
+}
+
+variable "api_throttling_rate_limit" {
+  description = "Sustained API Gateway request rate allowed per second."
+  type        = number
+  default     = 10
+}
+
+variable "api_throttling_burst_limit" {
+  description = "Maximum API Gateway request burst."
+  type        = number
+  default     = 20
+}

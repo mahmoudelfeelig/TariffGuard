@@ -8,6 +8,7 @@ import {
   FileCheck2,
   FileClock,
   Gauge,
+  LogOut,
   Menu,
   PlugZap,
   ReceiptText,
@@ -55,7 +56,19 @@ const viewTitles: Record<AppView, { eyebrow: string; title: string }> = {
   Settings: { eyebrow: "Workspace", title: "Runtime configuration" },
 };
 
-export function OverviewPage({ overview, date, onDateChange }: { overview: Overview; date: string; onDateChange: (value: string) => void }) {
+export function OverviewPage({
+  overview,
+  date,
+  onDateChange,
+  operatorName,
+  onSignOut,
+}: {
+  overview: Overview;
+  date: string;
+  onDateChange: (value: string) => void;
+  operatorName: string;
+  onSignOut?: () => void;
+}) {
   const [activeView, setActiveView] = useState<AppView>("Overview");
   const [detailSessionId, setDetailSessionId] = useState<string | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -128,7 +141,8 @@ export function OverviewPage({ overview, date, onDateChange }: { overview: Overv
                 </div>
               )}
               <button onClick={() => navigate("Alerts")} className="relative grid h-10 w-10 place-items-center rounded border border-line bg-panel text-slate-300" aria-label={`${alertTotal} alerts`}><Bell size={17} />{alertTotal > 0 && <span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-danger ring-2 ring-panel" />}</button>
-              <span className="hidden h-10 items-center rounded border border-line bg-panel px-3 text-sm font-medium sm:flex">Admin</span>
+              <span className="hidden max-w-40 truncate rounded border border-line bg-panel px-3 py-2.5 text-sm font-medium sm:block" title={operatorName}>{operatorName}</span>
+              {onSignOut && <button onClick={onSignOut} className="grid h-10 w-10 place-items-center rounded border border-line bg-panel text-slate-300 hover:text-white" aria-label="Sign out"><LogOut size={17} /></button>}
               <label className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded border border-line bg-panel px-3 text-sm text-slate-300 sm:flex-none">
                 <CalendarDays size={16} className="shrink-0 text-slate-500" />
                 <input className="min-w-0 bg-transparent text-slate-100 outline-none [color-scheme:dark]" type="date" value={date} onChange={(event) => onDateChange(event.target.value)} aria-label="Dashboard date" />

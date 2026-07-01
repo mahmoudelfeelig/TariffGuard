@@ -15,6 +15,7 @@
     "@vitejs/plugin-react": "^6.0.3",
     "autoprefixer": "^10.4.20",
     "lucide-react": "^0.468.0",
+    "oidc-client-ts": "^3.5.0",
     "postcss": "^8.4.41",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

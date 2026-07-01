@@ -8,7 +8,11 @@ TariffGuard is a compact serverless EV charging session validation and tariff au
 React/Vite dashboard
         |
         v
-API Gateway HTTP API with CORS
+Amazon Cognito managed login
+        |
+        | access token
+        v
+API Gateway HTTP API with JWT authorization, CORS, and throttling
         |
         v
 Lambda API handler ----> DynamoDB TariffGuardIdempotency
@@ -113,7 +117,10 @@ keeping the same charger/session key returns `409`.
   account concurrency pool instead of reserving capacity, which keeps deployment
   compatible with new AWS accounts that have low Lambda concurrency quotas.
 - `api_gateway.tf` creates the HTTP API, exact routes, Lambda proxy integration,
-  default auto-deploy stage, CORS policy, and invoke permission.
+  Cognito JWT authorizer, default auto-deploy stage, CORS policy, rate limits,
+  and invoke permission. Only `GET /health` is public.
+- `cognito.tf` creates an admin-managed operator directory, public browser app
+  client, Authorization Code + PKCE login, and the Cognito hosted domain.
 - `eventbridge.tf` schedules the audit Lambda once per day and grants
   EventBridge permission to invoke it.
 - `cloudwatch.tf` explicitly creates all Lambda log groups with seven-day
@@ -143,7 +150,7 @@ keeping the same charger/session key returns `409`.
 
 ## AWS Services
 
-Terraform creates API Gateway HTTP API, three Python 3.12 Lambda functions, SQS with a dead-letter queue, DynamoDB main and idempotency tables, EventBridge daily audit scheduling, IAM policies, and CloudWatch log groups with 7-day retention.
+Terraform creates API Gateway HTTP API, Cognito operator authentication, three Python 3.12 Lambda functions, SQS with a dead-letter queue, DynamoDB main and idempotency tables, EventBridge daily audit scheduling, IAM policies, and CloudWatch log groups with 7-day retention.
 
 ## Backend Decisions
 
@@ -193,7 +200,10 @@ From a clean checkout:
 make install
 cd infra
 terraform init
-terraform plan -out=tfplan -var='environment=demo' -var='cors_origin=http://localhost:5173'
+terraform plan -out=tfplan \
+  -var='environment=demo' \
+  -var='cors_origin=http://localhost:5173' \
+  -var='frontend_urls=["http://localhost:5173"]'
 terraform apply tfplan
 terraform output api_base_url
 ```
@@ -209,6 +219,7 @@ PowerShell:
 terraform plan -out=tfplan `
   -var="environment=dev" `
   -var="cors_origin=http://localhost:5173" `
+  -var='frontend_urls=["http://localhost:5173","https://tariffguard.elfeel.me"]' `
   -var="python_executable=python"
 terraform apply tfplan
 ```
@@ -219,6 +230,7 @@ Linux or WSL:
 terraform plan -out=tfplan \
   -var='environment=dev' \
   -var='cors_origin=http://localhost:5173' \
+  -var='frontend_urls=["http://localhost:5173","https://tariffguard.elfeel.me"]' \
   -var='python_executable=python3'
 terraform apply tfplan
 ```
@@ -237,6 +249,51 @@ Useful variables:
 terraform apply -var='environment=demo' -var='cors_origin=http://localhost:5173'
 ```
 
+## Authentication and Rate Limiting
+
+Every route except `GET /health` requires a Cognito access token. API Gateway
+verifies the JWT signature, issuer, expiry, and app-client audience before it
+invokes Lambda. The default stage allows 10 sustained requests per second with
+a burst of 20; both values are configurable Terraform variables.
+
+Create the first operator after `terraform apply`:
+
+```powershell
+$POOL_ID = terraform output -raw cognito_user_pool_id
+$CLIENT_ID = terraform output -raw cognito_client_id
+$EMAIL = "admin@example.com"
+$PASSWORD = Read-Host "Choose a password with upper, lower, number, and symbol"
+
+aws cognito-idp admin-create-user `
+  --user-pool-id $POOL_ID `
+  --username $EMAIL `
+  --user-attributes "Name=email,Value=$EMAIL" "Name=email_verified,Value=true" `
+  --message-action SUPPRESS
+
+aws cognito-idp admin-set-user-password `
+  --user-pool-id $POOL_ID `
+  --username $EMAIL `
+  --password $PASSWORD `
+  --permanent
+```
+
+The Cognito user pool disables public sign-up. Add future operators with the
+same two administrator commands.
+
+For Cloudflare Pages, configure:
+
+```text
+VITE_USE_MOCKS=false
+VITE_API_BASE_URL=<terraform output -raw api_base_url>
+VITE_COGNITO_AUTHORITY=<terraform output -raw cognito_authority>
+VITE_COGNITO_CLIENT_ID=<terraform output -raw cognito_client_id>
+VITE_COGNITO_DOMAIN=<terraform output -raw cognito_domain>
+```
+
+The app redirects unauthenticated visitors to Cognito managed login using
+Authorization Code + PKCE. Access tokens stay in browser storage and are added
+to API requests as `Authorization: Bearer <token>`.
+
 Destroy demo resources:
 
 ```bash
@@ -246,8 +303,17 @@ make destroy
 ## Seeding Demo Data
 
 ```bash
-API_URL="$(cd infra && terraform output -raw api_base_url)"
-API_URL="$API_URL" make seed
+$POOL_ID = terraform -chdir=infra output -raw cognito_user_pool_id
+$CLIENT_ID = terraform -chdir=infra output -raw cognito_client_id
+$API_URL = terraform -chdir=infra output -raw api_base_url
+$TOKEN = aws cognito-idp initiate-auth `
+  --auth-flow USER_PASSWORD_AUTH `
+  --client-id $CLIENT_ID `
+  --auth-parameters "USERNAME=$EMAIL,PASSWORD=$PASSWORD" `
+  --query "AuthenticationResult.AccessToken" `
+  --output text
+
+python scripts/seed.py --api-url $API_URL --access-token $TOKEN
 ```
 
 The seed script creates a tariff and submits three sessions: one normal, one reversed meter rejection, and one suspicious average power flag.
@@ -258,31 +324,33 @@ The seed script creates a tariff and submits three sessions: one normal, one rev
 curl "$API_URL/health"
 
 curl -X POST "$API_URL/tariffs" \
+  -H "authorization: Bearer $TOKEN" \
   -H 'content-type: application/json' \
   -d '{"tariffId":"berlin_public_standard","currency":"EUR","validFrom":"2026-06-01T00:00:00Z","pricePerKwh":"0.49","sessionFee":"0.35","idleFeePerMinute":"0.10","idleGraceMinutes":15,"taxRate":"0.19"}'
 
-curl "$API_URL/tariffs"
-curl "$API_URL/tariffs/berlin_public_standard/versions"
+curl -H "Authorization: Bearer $TOKEN" "$API_URL/tariffs"
+curl -H "Authorization: Bearer $TOKEN" "$API_URL/tariffs/berlin_public_standard/versions"
 
 curl -X POST "$API_URL/sessions" \
+  -H "authorization: Bearer $TOKEN" \
   -H 'content-type: application/json' \
   -d @examples/session.json
 
-curl "$API_URL/sessions/sess_001"
-curl "$API_URL/chargers/BER-CP-014/sessions"
-curl "$API_URL/alerts?date=2026-06-30"
-curl "$API_URL/audit/daily?date=2026-06-30"
-curl "$API_URL/overview?date=2026-06-30"
+curl -H "Authorization: Bearer $TOKEN" "$API_URL/sessions/sess_001"
+curl -H "Authorization: Bearer $TOKEN" "$API_URL/chargers/BER-CP-014/sessions"
+curl -H "Authorization: Bearer $TOKEN" "$API_URL/alerts?date=2026-06-30"
+curl -H "Authorization: Bearer $TOKEN" "$API_URL/audit/daily?date=2026-06-30"
+curl -H "Authorization: Bearer $TOKEN" "$API_URL/overview?date=2026-06-30"
 ```
 
 Duplicate behavior:
 
 ```bash
 # Same payload: 200 with existing state.
-curl -i -X POST "$API_URL/sessions" -H 'content-type: application/json' -d @examples/session.json
+curl -i -X POST "$API_URL/sessions" -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' -d @examples/session.json
 
 # Same chargerId/sessionId with changed payload: 409.
-curl -i -X POST "$API_URL/sessions" -H 'content-type: application/json' -d @examples/changed-session.json
+curl -i -X POST "$API_URL/sessions" -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' -d @examples/changed-session.json
 ```
 
 `POST /dev/seed` exists only when `ENVIRONMENT` is not `production`.
@@ -295,10 +363,18 @@ Use mock data:
 VITE_USE_MOCKS=true make frontend-dev
 ```
 
-Use the deployed API:
+Use the deployed API by placing its Terraform outputs in `frontend/.env.local`:
+
+```text
+VITE_USE_MOCKS=false
+VITE_API_BASE_URL=https://example.execute-api.eu-central-1.amazonaws.com
+VITE_COGNITO_AUTHORITY=https://cognito-idp.eu-central-1.amazonaws.com/eu-central-1_example
+VITE_COGNITO_CLIENT_ID=example
+VITE_COGNITO_DOMAIN=https://example.auth.eu-central-1.amazoncognito.com
+```
 
 ```bash
-VITE_API_BASE_URL="$API_URL" make frontend-dev
+make frontend-dev
 ```
 
 The dashboard includes loading, empty, and error states. The main overview matches the requested dark sidebar layout with KPI cards, a validation line chart, an alert donut chart, and a recent sessions table.
@@ -322,11 +398,12 @@ You can demo the project in under five minutes:
 ```bash
 make test
 make frontend-build
-cd infra && terraform apply
-API_URL="$(terraform output -raw api_base_url)"
-cd ..
-API_URL="$API_URL" make seed
-VITE_API_BASE_URL="$API_URL" make frontend-dev
+terraform -chdir=infra apply
+python scripts/seed.py --api-url "$API_URL" --access-token "$TOKEN"
+make frontend-dev
 ```
 
-Talk through the conditional idempotency write, append-only tariff versions, Decimal pricing, worker partial batch failure response, DLQ redrive policy, and DynamoDB keys. Then show `sess_reversed` becoming `REJECTED` and `sess_power` becoming `FLAGGED` after the worker processes SQS.
+Talk through Cognito JWT validation, API throttling, the conditional idempotency
+write, append-only tariff versions, Decimal pricing, worker partial batch
+failure response, DLQ redrive policy, and DynamoDB keys. Then show
+`sess_reversed` becoming `REJECTED` and `sess_power` becoming `FLAGGED`.

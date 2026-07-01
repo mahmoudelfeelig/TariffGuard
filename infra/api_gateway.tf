@@ -4,7 +4,7 @@ resource "aws_apigatewayv2_api" "http" {
 
   cors_configuration {
     allow_credentials = false
-    allow_headers     = ["content-type"]
+    allow_headers     = ["authorization", "content-type"]
     allow_methods     = ["GET", "POST", "OPTIONS"]
     allow_origins     = [var.cors_origin]
     max_age           = 300
@@ -16,6 +16,18 @@ resource "aws_apigatewayv2_integration" "api" {
   integration_type       = "AWS_PROXY"
   integration_uri        = aws_lambda_function.api.invoke_arn
   payload_format_version = "2.0"
+}
+
+resource "aws_apigatewayv2_authorizer" "cognito" {
+  api_id           = aws_apigatewayv2_api.http.id
+  authorizer_type  = "JWT"
+  identity_sources = ["$request.header.Authorization"]
+  name             = "${local.name}-cognito-jwt"
+
+  jwt_configuration {
+    audience = [aws_cognito_user_pool_client.dashboard.id]
+    issuer   = "https://${aws_cognito_user_pool.operators.endpoint}"
+  }
 }
 
 locals {
@@ -35,16 +47,23 @@ locals {
 }
 
 resource "aws_apigatewayv2_route" "routes" {
-  for_each  = local.api_routes
-  api_id    = aws_apigatewayv2_api.http.id
-  route_key = each.value
-  target    = "integrations/${aws_apigatewayv2_integration.api.id}"
+  for_each           = local.api_routes
+  api_id             = aws_apigatewayv2_api.http.id
+  route_key          = each.value
+  target             = "integrations/${aws_apigatewayv2_integration.api.id}"
+  authorization_type = each.value == "GET /health" ? "NONE" : "JWT"
+  authorizer_id      = each.value == "GET /health" ? null : aws_apigatewayv2_authorizer.cognito.id
 }
 
 resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.http.id
   name        = "$default"
   auto_deploy = true
+
+  default_route_settings {
+    throttling_burst_limit = var.api_throttling_burst_limit
+    throttling_rate_limit  = var.api_throttling_rate_limit
+  }
 }
 
 resource "aws_lambda_permission" "api_gateway" {

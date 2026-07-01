@@ -12,15 +12,19 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--api-url", required=True)
     parser.add_argument("--count", type=int, default=5)
+    parser.add_argument("--access-token")
     args = parser.parse_args()
 
     for index in range(args.count):
         payload = copy.deepcopy(SESSIONS[index % len(SESSIONS)])
         payload["sessionId"] = f"{payload['sessionId']}_{index}"
+        headers = {"content-type": "application/json"}
+        if args.access_token:
+            headers["authorization"] = f"Bearer {args.access_token}"
         request = Request(
             f"{args.api_url.rstrip('/')}/sessions",
             data=json.dumps(payload).encode("utf-8"),
-            headers={"content-type": "application/json"},
+            headers=headers,
             method="POST",
         )
         with urlopen(request, timeout=10) as response:

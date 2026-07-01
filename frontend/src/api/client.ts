@@ -1,5 +1,6 @@
 import { mockAlerts, mockAudit, mockOverview, mockSessions, mockTariffs, mockTariffVersions } from "../data/mockData";
 import type { AlertRecord, AuditSummary, Overview, SessionRow, TariffListItem, TariffVersion } from "./types";
+import { authExpiredEvent, getAccessToken } from "../auth";
 
 const useMocks = import.meta.env.VITE_USE_MOCKS === "true" || !import.meta.env.VITE_API_BASE_URL;
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL as string | undefined;
@@ -9,7 +10,7 @@ export async function getOverview(date: string): Promise<Overview> {
     await new Promise((resolve) => window.setTimeout(resolve, 250));
     return mockOverview;
   }
-  const response = await fetch(`${apiBaseUrl}/overview?date=${date}`);
+  const response = await authorizedFetch(`${apiBaseUrl}/overview?date=${date}`);
   if (!response.ok) {
     throw new Error(`Overview request failed with ${response.status}`);
   }
@@ -17,11 +18,25 @@ export async function getOverview(date: string): Promise<Overview> {
 }
 
 async function getJson<T>(path: string): Promise<T> {
-  const response = await fetch(`${apiBaseUrl}${path}`);
+  const response = await authorizedFetch(`${apiBaseUrl}${path}`);
   if (!response.ok) {
     throw new Error(`Request failed with ${response.status}`);
   }
   return response.json() as Promise<T>;
+}
+
+async function authorizedFetch(url: string): Promise<Response> {
+  const accessToken = await getAccessToken();
+  const headers = accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined;
+  const response = await fetch(url, { headers });
+  if (response.status === 401) {
+    window.dispatchEvent(new Event(authExpiredEvent));
+    throw new Error("Your session has expired. Sign in again.");
+  }
+  if (response.status === 429) {
+    throw new Error("The API request limit was reached. Please retry shortly.");
+  }
+  return response;
 }
 
 export async function getSession(sessionId: string): Promise<SessionRow> {
