@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { ArrowDown, CalendarClock, Check, History, ReceiptText } from "lucide-react";
-import { getTariffs, getTariffVersions } from "../api/client";
+import { ArrowDown, CalendarClock, Check, History, Plus, ReceiptText, X } from "lucide-react";
+import { createTariff, getTariffs, getTariffVersions } from "../api/client";
 import type { TariffListItem, TariffVersion } from "../api/types";
 import { ViewState } from "../components/ViewState";
 import { formatDate, formatMoney } from "../lib/format";
@@ -10,12 +10,18 @@ export function TariffsPage() {
   const [selectedId, setSelectedId] = useState("");
   const [versions, setVersions] = useState<TariffVersion[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [formOpen, setFormOpen] = useState(false);
 
-  useEffect(() => {
-    getTariffs().then((items) => {
+  function loadTariffs() {
+    return getTariffs().then((items) => {
       setTariffs(items);
       setSelectedId((current) => current || items[0]?.tariffId || "");
-    }).catch((reason: Error) => setError(reason.message));
+    });
+  }
+
+  useEffect(() => {
+    loadTariffs().catch((reason: Error) => setError(reason.message));
   }, []);
 
   useEffect(() => {
@@ -26,7 +32,6 @@ export function TariffsPage() {
 
   if (error) return <ViewState title="Tariffs unavailable" body={error} kind="error" />;
   if (!tariffs) return <ViewState title="Loading tariffs" body="Reading tariff IDs and immutable versions." kind="loading" />;
-  if (!tariffs.length) return <ViewState title="No tariffs configured" body="Create the first tariff version through POST /tariffs." />;
 
   const current = versions?.[0];
   const previous = versions?.[1];
@@ -34,7 +39,7 @@ export function TariffsPage() {
   return (
     <div className="grid min-w-0 gap-5 xl:grid-cols-[320px_minmax(0,1fr)]">
       <section className="min-w-0 border border-line bg-panel shadow-panel">
-        <div className="border-b border-line p-5"><h2 className="font-semibold">Tariff catalog</h2><p className="mt-1 text-xs text-slate-500">{tariffs.length} configured tariff IDs</p></div>
+        <div className="flex items-center justify-between gap-3 border-b border-line p-5"><div><h2 className="font-semibold">Tariff catalog</h2><p className="mt-1 text-xs text-slate-500">{tariffs.length} configured tariff IDs</p></div><button onClick={() => setFormOpen(true)} aria-label="Create tariff version" className="grid h-9 w-9 place-items-center rounded bg-mint text-slate-950"><Plus size={17} /></button></div>
         <div className="space-y-1 p-2">
           {tariffs.map((tariff) => (
             <button key={tariff.tariffId} onClick={() => setSelectedId(tariff.tariffId)} className={`w-full rounded p-3 text-left ${selectedId === tariff.tariffId ? "bg-mint/10 ring-1 ring-mint/30" : "hover:bg-panelSoft"}`}>
@@ -87,8 +92,15 @@ export function TariffsPage() {
           </section>
         </div>
       )}
+      {formOpen && <TariffForm busy={creating} onClose={() => setFormOpen(false)} onSubmit={async (tariff) => { setCreating(true); setError(null); try { await createTariff(tariff); setSelectedId(tariff.tariffId); await loadTariffs(); setVersions(await getTariffVersions(tariff.tariffId)); setFormOpen(false); } catch (reason) { setError((reason as Error).message); } finally { setCreating(false); } }} />}
     </div>
   );
+}
+
+function TariffForm({ busy, onClose, onSubmit }: { busy: boolean; onClose: () => void; onSubmit: (tariff: TariffVersion) => void }) {
+  const [tariff, setTariff] = useState<TariffVersion>({ tariffId: "", currency: "EUR", validFrom: new Date().toISOString().slice(0, 16), pricePerKwh: "0.42", sessionFee: "0.50", idleFeePerMinute: "0.10", idleGraceMinutes: 10, taxRate: "0.19" });
+  const field = (key: keyof TariffVersion, value: string) => setTariff((current) => ({ ...current, [key]: key === "idleGraceMinutes" ? Number(value) : value }));
+  return <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4"><form onSubmit={(event) => { event.preventDefault(); onSubmit({ ...tariff, validFrom: new Date(tariff.validFrom).toISOString() }); }} className="w-full max-w-2xl border border-line bg-panel p-5 shadow-2xl"><div className="flex items-center justify-between"><div><h2 className="font-semibold">Create tariff version</h2><p className="mt-1 text-xs text-slate-500">Versions are append-only after creation.</p></div><button type="button" onClick={onClose} className="grid h-9 w-9 place-items-center rounded border border-line"><X size={17} /></button></div><div className="mt-5 grid gap-4 sm:grid-cols-2">{([["tariffId", "Tariff ID", "text"], ["currency", "Currency", "text"], ["validFrom", "Effective from", "datetime-local"], ["pricePerKwh", "Price per kWh", "number"], ["sessionFee", "Session fee", "number"], ["idleFeePerMinute", "Idle fee per minute", "number"], ["idleGraceMinutes", "Idle grace minutes", "number"], ["taxRate", "Tax rate", "number"]] as const).map(([key, label, type]) => <label key={key} className="text-xs font-semibold text-slate-400">{label}<input required type={type} step={type === "number" ? "0.01" : undefined} value={tariff[key]} onChange={(event) => field(key, event.target.value)} className="mt-2 h-10 w-full rounded border border-line bg-ink px-3 text-sm text-white outline-none focus:border-mint/50" /></label>)}</div><div className="mt-6 flex justify-end gap-2"><button type="button" onClick={onClose} className="h-10 rounded border border-line px-4 text-sm font-semibold">Cancel</button><button disabled={busy} className="h-10 rounded bg-mint px-4 text-sm font-semibold text-slate-950 disabled:opacity-50">Create version</button></div></form></div>;
 }
 
 function Rate({ icon: Icon, label, value }: { icon: typeof ReceiptText; label: string; value: string }) {

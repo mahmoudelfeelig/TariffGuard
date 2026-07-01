@@ -1,4 +1,4 @@
-import type { AlertRecord, AuditSummary, Overview, SessionRow, TariffListItem, TariffVersion } from "../api/types";
+import type { AlertRecord, AuditSummary, Operator, Overview, SessionRow, TariffListItem, TariffVersion } from "../api/types";
 
 const tariffCurrent: TariffVersion = {
   tariffId: "berlin_public_standard",
@@ -136,6 +136,11 @@ export const mockAudit: AuditSummary = {
   createdAt: "2026-06-30T23:55:00Z",
 };
 
+export const mockOperators: Operator[] = [
+  { username: "demo-admin", email: "admin@tariffguard.demo", enabled: true, status: "CONFIRMED", role: "admin", createdAt: "2026-06-20T08:00:00Z" },
+  { username: "demo-operator", email: "operations@tariffguard.demo", enabled: true, status: "CONFIRMED", role: "operator", createdAt: "2026-06-24T09:30:00Z" },
+];
+
 export const mockOverview: Overview = {
   kpis: {
     sessionsProcessed: 1284,
@@ -145,19 +150,26 @@ export const mockOverview: Overview = {
     estimatedRevenue: "24891.42",
   },
   validationTrend: [
-    { date: "Jun 24", validated: 160, flagged: 14, rejected: 3 },
-    { date: "Jun 25", validated: 174, flagged: 11, rejected: 4 },
-    { date: "Jun 26", validated: 182, flagged: 18, rejected: 5 },
-    { date: "Jun 27", validated: 171, flagged: 10, rejected: 2 },
-    { date: "Jun 28", validated: 196, flagged: 16, rejected: 4 },
-    { date: "Jun 29", validated: 207, flagged: 13, rejected: 3 },
-    { date: "Jun 30", validated: 178, flagged: 9, rejected: 4 },
+    { date: "Jun 24", validated: 160, flagged: 14, rejected: 3, sessions: 177, revenue: "3240.20", energyKwh: "6412.4" },
+    { date: "Jun 25", validated: 174, flagged: 11, rejected: 4, sessions: 189, revenue: "3584.10", energyKwh: "7022.8" },
+    { date: "Jun 26", validated: 182, flagged: 18, rejected: 5, sessions: 205, revenue: "3821.72", energyKwh: "7510.3" },
+    { date: "Jun 27", validated: 171, flagged: 10, rejected: 2, sessions: 183, revenue: "3468.25", energyKwh: "6801.7" },
+    { date: "Jun 28", validated: 196, flagged: 16, rejected: 4, sessions: 216, revenue: "4102.90", energyKwh: "8093.2" },
+    { date: "Jun 29", validated: 207, flagged: 13, rejected: 3, sessions: 223, revenue: "4258.40", energyKwh: "8350.5" },
+    { date: "Jun 30", validated: 178, flagged: 9, rejected: 4, sessions: 191, revenue: "3415.85", energyKwh: "6914.8" },
   ],
   topAlertTypes: [
     { name: "SUSPICIOUS_AVERAGE_POWER", value: 38 },
     { name: "LONG_IDLE_TIME", value: 24 },
     { name: "EXCESSIVE_ENERGY", value: 18 },
     { name: "METER_REVERSED", value: 11 },
+  ],
+  topChargers: [
+    { name: "BER-CP-014", value: 96 },
+    { name: "BER-CP-020", value: 84 },
+    { name: "BER-CP-006", value: 77 },
+    { name: "BER-CP-031", value: 69 },
+    { name: "BER-CP-011", value: 58 },
   ],
   recentSessions: mockSessions,
 };

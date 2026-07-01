@@ -135,12 +135,15 @@ keeping the same charger/session key returns `409`.
 - `pages/OverviewPage.tsx` provides the shared responsive shell, navigation,
   KPI cards, charts, recent sessions, CSV export, and auxiliary operational
   views.
-- `pages/SessionsPage.tsx` filters the loaded sessions by free text and status.
+- `pages/SessionsPage.tsx` reads the paginated session registry in 100-row
+  batches, then filters loaded rows by free text and status.
 - `pages/SessionDetailPage.tsx` calls `GET /sessions/{sessionId}` and displays
   the immutable input, validation flags, tariff snapshot, and price breakdown.
 - `pages/TariffsPage.tsx` calls the tariff list and version endpoints, then
-  renders the active version, previous-version comparison, and immutable
-  timeline.
+  creates append-only versions and renders the active version, comparison, and
+  immutable timeline.
+- `pages/UsersPage.tsx` lets Cognito administrators create operator or admin
+  accounts and enable or disable existing accounts.
 - `pages/AlertsPage.tsx` calls the dated alerts endpoint and groups records into
   high, medium, and low severity work columns.
 - `pages/AuditPage.tsx` calls the daily audit endpoint and renders persisted
@@ -275,10 +278,15 @@ aws cognito-idp admin-set-user-password `
   --username $EMAIL `
   --password $PASSWORD `
   --permanent
+
+aws cognito-idp admin-add-user-to-group `
+  --user-pool-id $POOL_ID `
+  --username $EMAIL `
+  --group-name admins
 ```
 
-The Cognito user pool disables public sign-up. Add future operators with the
-same two administrator commands.
+The Cognito user pool disables public sign-up. After this bootstrap, use the
+Users page to create operators or administrators and to disable accounts.
 
 For Cloudflare Pages, configure:
 
@@ -318,6 +326,22 @@ python scripts/seed.py --api-url $API_URL --access-token $TOKEN
 
 The seed script creates a tariff and submits three sessions: one normal, one reversed meter rejection, and one suspicious average power flag.
 
+Generate a larger seven-day dataset after the tariff exists:
+
+```powershell
+python scripts/simulate_sessions.py `
+  --api-url $API_URL `
+  --access-token $TOKEN `
+  --count 500
+```
+
+The simulator rotates through valid AC/DC charging, zero-energy sessions,
+excessive energy, implausible power, long idle time, reversed meters, invalid
+duration, and missing-tariff paths. Charger, driver, energy, timing, and idle
+values vary deterministically; `--seed` changes the generated dataset. The
+script paces requests below the default API rate limit and retries throttled or
+transient server responses.
+
 ## API Examples
 
 ```bash
@@ -337,6 +361,11 @@ curl -X POST "$API_URL/sessions" \
   -d @examples/session.json
 
 curl -H "Authorization: Bearer $TOKEN" "$API_URL/sessions/sess_001"
+curl -H "Authorization: Bearer $TOKEN" "$API_URL/sessions?limit=100"
+curl -X POST "$API_URL/sessions/sess_001/invalidate" \
+  -H "authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"reason":"Incorrect source meter reading"}'
 curl -H "Authorization: Bearer $TOKEN" "$API_URL/chargers/BER-CP-014/sessions"
 curl -H "Authorization: Bearer $TOKEN" "$API_URL/alerts?date=2026-06-30"
 curl -H "Authorization: Bearer $TOKEN" "$API_URL/audit/daily?date=2026-06-30"
@@ -379,13 +408,18 @@ make frontend-dev
 
 The dashboard includes loading, empty, and error states. The main overview matches the requested dark sidebar layout with KPI cards, a validation line chart, an alert donut chart, and a recent sessions table.
 
+Every sidebar item has a browser URL. Cloudflare Pages serves
+`frontend/public/_redirects`, so direct visits and browser back/forward work for
+paths such as `/sessions`, `/sessions/{sessionId}`, `/tariffs`, and `/users`.
+
 The sidebar views are functional:
 
-- Sessions: search, status filtering, and session detail navigation.
-- Session detail: price components, tariff snapshot, validation flags, raw input.
-- Tariffs: catalog, current rates, version comparison, immutable timeline.
+- Sessions: paginated loading, search, status filtering, and detail navigation.
+- Session detail: pricing, tariff snapshot, flags, raw input, and invalidation.
+- Tariffs: creation, catalog, current rates, comparison, immutable timeline.
 - Alerts: severity-grouped operator board linked back to session detail.
 - Audit: daily totals, pass rate, estimated revenue, outcome distribution.
+- Users: Cognito account creation, admin roles, and enable/disable controls.
 
 ## Cost Notes
 

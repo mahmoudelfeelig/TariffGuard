@@ -1,14 +1,45 @@
-import { useMemo, useState } from "react";
-import { ArrowRight, Filter, Search } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { ArrowRight, Filter, LoaderCircle, Search } from "lucide-react";
+import { getSessions } from "../api/client";
 import type { SessionRow, SessionStatus } from "../api/types";
 import { StatusBadge } from "../components/StatusBadge";
 import { formatDate, formatMoney } from "../lib/format";
 
 const statuses: Array<SessionStatus | "ALL"> = ["ALL", "VALIDATED", "FLAGGED", "REJECTED", "PENDING_VALIDATION", "FAILED_PROCESSING"];
 
-export function SessionsPage({ sessions, onOpenSession }: { sessions: SessionRow[]; onOpenSession: (sessionId: string) => void }) {
+export function SessionsPage({ onOpenSession }: { onOpenSession: (sessionId: string) => void }) {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<SessionStatus | "ALL">("ALL");
+  const [sessions, setSessions] = useState<SessionRow[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    setError(null);
+    getSessions(undefined, status)
+      .then((page) => {
+        setSessions(page.sessions);
+        setNextCursor(page.nextCursor);
+        setTotal(page.total);
+      })
+      .catch((reason: Error) => setError(reason.message))
+      .finally(() => setLoading(false));
+  }, [status]);
+
+  function loadMore() {
+    if (!nextCursor) return;
+    setLoading(true);
+    getSessions(nextCursor, status)
+      .then((page) => {
+        setSessions((current) => [...current, ...page.sessions]);
+        setNextCursor(page.nextCursor);
+      })
+      .catch((reason: Error) => setError(reason.message))
+      .finally(() => setLoading(false));
+  }
 
   const filtered = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -22,7 +53,7 @@ export function SessionsPage({ sessions, onOpenSession }: { sessions: SessionRow
   return (
     <div className="space-y-5">
       <div className="grid gap-3 md:grid-cols-3">
-        <Metric label="Visible sessions" value={filtered.length.toString()} detail={`${sessions.length} loaded`} />
+        <Metric label="Visible sessions" value={filtered.length.toString()} detail={`${sessions.length} of ${total} loaded`} />
         <Metric label="Requires attention" value={sessions.filter((item) => item.status === "FLAGGED" || item.status === "REJECTED").length.toString()} detail="Flagged or rejected" />
         <Metric label="Processed value" value={formatMoney(sessions.reduce((sum, item) => sum + Number(item.price?.displayTotal ?? 0), 0).toFixed(2))} detail="Loaded result set" />
       </div>
@@ -47,7 +78,11 @@ export function SessionsPage({ sessions, onOpenSession }: { sessions: SessionRow
           </div>
         </div>
 
-        {filtered.length === 0 ? (
+        {error ? (
+          <div className="grid min-h-52 place-items-center px-5 text-center"><div><p className="text-sm font-semibold text-danger">Sessions unavailable</p><p className="mt-2 text-xs text-slate-500">{error}</p></div></div>
+        ) : loading && sessions.length === 0 ? (
+          <div className="grid min-h-52 place-items-center"><LoaderCircle className="animate-spin text-mint" /></div>
+        ) : filtered.length === 0 ? (
           <div className="grid min-h-52 place-items-center text-center">
             <div><Search className="mx-auto text-slate-600" /><p className="mt-3 text-sm font-medium">No sessions match these filters</p></div>
           </div>
@@ -74,6 +109,7 @@ export function SessionsPage({ sessions, onOpenSession }: { sessions: SessionRow
             </table>
           </div>
         )}
+        {nextCursor && <div className="flex justify-center border-t border-line p-4"><button disabled={loading} onClick={loadMore} className="flex h-10 items-center gap-2 rounded border border-line bg-panelSoft px-4 text-sm font-semibold hover:border-mint/40 disabled:opacity-50">{loading && <LoaderCircle size={15} className="animate-spin" />}Load 100 more</button></div>}
       </section>
     </div>
   );

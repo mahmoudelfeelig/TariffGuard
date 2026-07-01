@@ -1,10 +1,13 @@
-export type SessionStatus = "PENDING_VALIDATION" | "VALIDATED" | "FLAGGED" | "REJECTED" | "FAILED_PROCESSING";
+export type SessionStatus = "PENDING_VALIDATION" | "VALIDATED" | "FLAGGED" | "REJECTED" | "FAILED_PROCESSING" | "INVALIDATED";
 
 export type ValidationTrendPoint = {
   date: string;
   validated: number;
   flagged: number;
   rejected: number;
+  sessions: number;
+  revenue: string;
+  energyKwh: string;
 };
 
 export type AlertType = {
@@ -99,5 +102,28 @@ export type Overview = {
   };
   validationTrend: ValidationTrendPoint[];
   topAlertTypes: AlertType[];
+  topChargers: AlertType[];
   recentSessions: SessionRow[];
+};
+
+export type SessionPage = {
+  sessions: SessionRow[];
+  nextCursor: string | null;
+  total: number;
+};
+
+export type Operator = {
+  username: string;
+  email: string;
+  enabled: boolean;
+  status: string;
+  role: "operator" | "admin";
+  createdAt?: string;
+};
+
+export type CreatedOperator = {
+  username: string;
+  email: string;
+  role: "operator" | "admin";
+  temporaryPassword: string;
 };

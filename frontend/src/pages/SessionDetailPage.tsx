@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { ArrowLeft, Clock3, Gauge, ReceiptText, ShieldAlert, Zap } from "lucide-react";
-import { getSession } from "../api/client";
+import { ArrowLeft, Ban, Clock3, Gauge, ReceiptText, ShieldAlert, Zap } from "lucide-react";
+import { getSession, invalidateSession } from "../api/client";
 import type { SessionRow } from "../api/types";
 import { StatusBadge } from "../components/StatusBadge";
 import { ViewState } from "../components/ViewState";
@@ -10,6 +10,8 @@ export function SessionDetailPage({ sessionId, onBack }: { sessionId: string; on
   const [session, setSession] = useState<SessionRow | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [requestId, setRequestId] = useState(0);
+  const [reason, setReason] = useState("");
+  const [invalidating, setInvalidating] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -29,6 +31,19 @@ export function SessionDetailPage({ sessionId, onBack }: { sessionId: string; on
     ["Subtotal", session.price?.subtotal],
     ["Tax", session.price?.tax],
   ];
+
+  async function invalidate() {
+    if (reason.trim().length < 3) return;
+    setInvalidating(true);
+    try {
+      setSession(await invalidateSession(sessionId, reason.trim()));
+      setReason("");
+    } catch (reason) {
+      setError((reason as Error).message);
+    } finally {
+      setInvalidating(false);
+    }
+  }
 
   return (
     <div className="space-y-5">
@@ -83,6 +98,12 @@ export function SessionDetailPage({ sessionId, onBack }: { sessionId: string; on
       <section className="border border-line bg-[#080d17] p-5 shadow-panel">
         <h3 className="font-semibold">Raw input</h3>
         <pre className="mt-4 overflow-x-auto text-xs leading-6 text-slate-400">{JSON.stringify(session.rawPayload ?? session, null, 2)}</pre>
+      </section>
+
+      <section className="border border-danger/25 bg-danger/5 p-5">
+        <div className="flex items-center gap-2"><Ban size={18} className="text-danger" /><h3 className="font-semibold">Invalidate session</h3></div>
+        <p className="mt-2 text-sm text-slate-400">Exclude a compromised or incorrect session from active operational results while preserving its audit record.</p>
+        <div className="mt-4 flex flex-col gap-2 sm:flex-row"><input disabled={session.status === "INVALIDATED"} value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Reason for invalidation" className="h-10 min-w-0 flex-1 rounded border border-line bg-ink px-3 text-sm outline-none focus:border-danger/50" /><button disabled={invalidating || reason.trim().length < 3 || session.status === "INVALIDATED"} onClick={invalidate} className="h-10 rounded bg-danger px-4 text-sm font-semibold text-white disabled:opacity-40">{session.status === "INVALIDATED" ? "Invalidated" : "Invalidate"}</button></div>
       </section>
     </div>
   );

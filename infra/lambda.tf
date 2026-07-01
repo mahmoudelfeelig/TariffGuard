@@ -33,6 +33,7 @@ resource "aws_lambda_function" "api" {
   environment {
     variables = merge(local.common_environment, {
       SQS_QUEUE_URL = aws_sqs_queue.validation.url
+      USER_POOL_ID  = aws_cognito_user_pool.operators.id
     })
   }
 

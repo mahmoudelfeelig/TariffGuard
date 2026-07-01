@@ -20,7 +20,12 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     del event, context
     store = repo()
     date = iso_now()[:10]
-    sessions = store.recent_sessions_scan(limit=100)
+    sessions = [
+        item
+        for item in store.all_sessions_scan()
+        if str(item.get("startedAt", ""))[:10] == date
+        and item.get("status") != "INVALIDATED"
+    ]
     counts = Counter(item.get("status", "UNKNOWN") for item in sessions)
     revenue = sum(
         Decimal(str((item.get("price") or {}).get("displayTotal", "0"))) for item in sessions

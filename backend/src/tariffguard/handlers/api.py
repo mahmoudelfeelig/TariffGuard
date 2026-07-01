@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any
+from base64 import urlsafe_b64decode, urlsafe_b64encode
+from typing import Any, Literal
 
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
-from tariffguard.models.session import SessionIngest, SessionRecord
+from tariffguard.models.session import SessionIngest, SessionRecord, ValidationFlag
 from tariffguard.models.tariff import TariffVersion
+from tariffguard.repositories.cognito_repo import CognitoRepository
 from tariffguard.repositories.dynamodb_repo import (
     DuplicateChangedPayload,
     DuplicateSamePayload,
+    DuplicateTariffVersion,
     DynamoRepository,
 )
 from tariffguard.services.idempotency import idempotency_key, payload_hash
@@ -39,6 +42,45 @@ def _route(event: dict[str, Any]) -> tuple[str, str]:
     )
 
 
+class InvalidateRequest(BaseModel):
+    reason: str = Field(min_length=3, max_length=240)
+
+
+class UserCreateRequest(BaseModel):
+    email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    role: Literal["operator", "admin"] = "operator"
+
+
+class UserStatusRequest(BaseModel):
+    enabled: bool
+
+
+def _groups(event: dict[str, Any]) -> set[str]:
+    value = (
+        event.get("requestContext", {})
+        .get("authorizer", {})
+        .get("jwt", {})
+        .get("claims", {})
+        .get("cognito:groups", "")
+    )
+    if isinstance(value, list):
+        return set(value)
+    return {item.strip() for item in str(value).strip("[]").split(",") if item.strip()}
+
+
+def _offset(value: str | None) -> int:
+    if not value:
+        return 0
+    try:
+        return max(0, int(urlsafe_b64decode(value.encode()).decode()))
+    except (ValueError, UnicodeDecodeError):
+        raise ValueError("invalid cursor") from None
+
+
+def _cursor(value: int | None) -> str | None:
+    return urlsafe_b64encode(str(value).encode()).decode() if value is not None else None
+
+
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     del context
     cors_origin = os.environ.get("CORS_ORIGIN", "*")
@@ -56,7 +98,17 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             return response(
                 400, {"error": "validation_error", "details": exc.errors()}, cors_origin=cors_origin
             )
-        store.put_tariff(tariff)
+        try:
+            store.put_tariff(tariff)
+        except DuplicateTariffVersion:
+            return response(
+                409,
+                {
+                    "error": "tariff_version_exists",
+                    "message": "This effective date already exists.",
+                },
+                cors_origin=cors_origin,
+            )
         return response(201, tariff.model_dump(mode="json"), cors_origin=cors_origin)
     if method == "GET" and path == "/tariffs":
         return response(200, {"tariffs": store.list_tariffs()}, cors_origin=cors_origin)
@@ -115,6 +167,47 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             {"sessionId": session.sessionId, "status": "PENDING_VALIDATION"},
             cors_origin=cors_origin,
         )
+    if method == "GET" and path == "/sessions":
+        params = event.get("queryStringParameters") or {}
+        try:
+            limit = min(100, max(1, int(params.get("limit", "50"))))
+            offset = _offset(params.get("cursor"))
+        except ValueError:
+            return response(400, {"error": "invalid_pagination"}, cors_origin=cors_origin)
+        sessions, next_offset, total = store.list_sessions(
+            limit=limit, offset=offset, status=params.get("status")
+        )
+        return response(
+            200,
+            {"sessions": sessions, "nextCursor": _cursor(next_offset), "total": total},
+            cors_origin=cors_origin,
+        )
+    if method == "POST" and path.startswith("/sessions/") and path.endswith("/invalidate"):
+        session_id = path.split("/")[2]
+        try:
+            request = InvalidateRequest.model_validate(_body(event))
+        except ValidationError as exc:
+            return response(
+                400, {"error": "validation_error", "details": exc.errors()}, cors_origin=cors_origin
+            )
+        item = store.get_session(session_id)
+        if not item:
+            return response(404, {"error": "not_found"}, cors_origin=cors_origin)
+        record = SessionRecord.model_validate(item)
+        if record.status == "INVALIDATED":
+            return response(200, record.model_dump(mode="json"), cors_origin=cors_origin)
+        record.status = "INVALIDATED"
+        record.updatedAt = iso_now()
+        record.validationFlags.append(
+            ValidationFlag(
+                code="MANUALLY_INVALIDATED",
+                severity="LOW",
+                message=request.reason,
+                rejectsSession=False,
+            )
+        )
+        store.update_session_result(record)
+        return response(200, record.model_dump(mode="json"), cors_origin=cors_origin)
     if method == "GET" and path.startswith("/sessions/"):
         session = store.get_session(path.split("/")[2])
         return response(
@@ -139,9 +232,43 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         date = (event.get("queryStringParameters") or {}).get("date", iso_now()[:10])
         return response(
             200,
-            build_overview(store.recent_sessions_scan(), store.list_alerts(date)),
+            build_overview(store.all_sessions_scan(), store.list_alerts(date), date),
             cors_origin=cors_origin,
         )
+    if path.startswith("/admin/"):
+        if "admins" not in _groups(event):
+            return response(403, {"error": "admin_required"}, cors_origin=cors_origin)
+        users = CognitoRepository(os.environ["USER_POOL_ID"])
+        if method == "GET" and path == "/admin/users":
+            return response(200, {"users": users.list_users()}, cors_origin=cors_origin)
+        if method == "POST" and path == "/admin/users":
+            try:
+                request = UserCreateRequest.model_validate(_body(event))
+            except ValidationError as exc:
+                return response(
+                    400,
+                    {"error": "validation_error", "details": exc.errors()},
+                    cors_origin=cors_origin,
+                )
+            return response(
+                201, users.create_user(request.email, request.role), cors_origin=cors_origin
+            )
+        if method == "POST" and path.startswith("/admin/users/") and path.endswith("/status"):
+            username = path.split("/")[3]
+            try:
+                request = UserStatusRequest.model_validate(_body(event))
+            except ValidationError as exc:
+                return response(
+                    400,
+                    {"error": "validation_error", "details": exc.errors()},
+                    cors_origin=cors_origin,
+                )
+            users.set_enabled(username, request.enabled)
+            return response(
+                200,
+                {"username": username, "enabled": request.enabled},
+                cors_origin=cors_origin,
+            )
     if method == "POST" and path == "/dev/seed":
         if os.environ.get("ENVIRONMENT") == "production":
             return response(404, {"error": "not_found"}, cors_origin=cors_origin)

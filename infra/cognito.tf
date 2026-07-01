@@ -62,3 +62,9 @@ resource "aws_cognito_user_pool_domain" "dashboard" {
   domain       = "${local.name}-${data.aws_caller_identity.current.account_id}"
   user_pool_id = aws_cognito_user_pool.operators.id
 }
+
+resource "aws_cognito_user_group" "admins" {
+  name         = "admins"
+  user_pool_id = aws_cognito_user_pool.operators.id
+  description  = "TariffGuard administrators who can manage operator accounts"
+}

@@ -35,6 +35,10 @@ class DuplicateChangedPayload(Exception):
     pass
 
 
+class DuplicateTariffVersion(Exception):
+    pass
+
+
 class DynamoRepository:
     def __init__(
         self,
@@ -81,7 +85,15 @@ class DynamoRepository:
                 "GSI1SK": f"{tariff.tariffId}#{tariff.validFrom}",
             }
         )
-        self.main.put_item(Item=item)
+        try:
+            self.main.put_item(
+                Item=item,
+                ConditionExpression="attribute_not_exists(PK) AND attribute_not_exists(SK)",
+            )
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                raise DuplicateTariffVersion() from exc
+            raise
 
     def list_tariffs(self) -> list[dict[str, Any]]:
         response = self.main.query(
@@ -183,14 +195,32 @@ class DynamoRepository:
         return self.main.get_item(Key={"PK": f"AUDIT_DAY#{date}", "SK": "SUMMARY"}).get("Item")
 
     def recent_sessions_scan(self, limit: int = 25) -> list[dict[str, Any]]:
-        response = self.main.scan(
-            FilterExpression="entityType = :entity",
-            ExpressionAttributeValues={":entity": "SESSION"},
-            Limit=limit,
-        )
-        return sorted(
-            response.get("Items", []), key=lambda item: item.get("startedAt", ""), reverse=True
-        )
+        return self.all_sessions_scan()[:limit]
+
+    def all_sessions_scan(self) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        kwargs: dict[str, Any] = {
+            "FilterExpression": "entityType = :entity",
+            "ExpressionAttributeValues": {":entity": "SESSION"},
+        }
+        while True:
+            response = self.main.scan(**kwargs)
+            items.extend(response.get("Items", []))
+            last_key = response.get("LastEvaluatedKey")
+            if not last_key:
+                break
+            kwargs["ExclusiveStartKey"] = last_key
+        return sorted(items, key=lambda item: item.get("startedAt", ""), reverse=True)
+
+    def list_sessions(
+        self, *, limit: int = 50, offset: int = 0, status: str | None = None
+    ) -> tuple[list[dict[str, Any]], int | None, int]:
+        sessions = self.all_sessions_scan()
+        if status:
+            sessions = [item for item in sessions if item.get("status") == status]
+        page = sessions[offset : offset + limit]
+        next_offset = offset + limit if offset + limit < len(sessions) else None
+        return page, next_offset, len(sessions)
 
     def enqueue_session(self, session_id: str) -> None:
         if not self.sqs_queue_url:

@@ -37,12 +37,17 @@ locals {
     "GET /tariffs",
     "GET /tariffs/{tariffId}/versions",
     "POST /sessions",
+    "GET /sessions",
     "GET /sessions/{sessionId}",
+    "POST /sessions/{sessionId}/invalidate",
     "GET /chargers/{chargerId}/sessions",
     "GET /alerts",
     "GET /audit/daily",
     "GET /overview",
-    "POST /dev/seed"
+    "POST /dev/seed",
+    "GET /admin/users",
+    "POST /admin/users",
+    "POST /admin/users/{username}/status"
   ])
 }
 

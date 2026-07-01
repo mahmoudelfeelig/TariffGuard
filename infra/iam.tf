@@ -55,6 +55,18 @@ resource "aws_iam_role_policy" "lambda" {
           aws_sqs_queue.validation.arn,
           aws_sqs_queue.validation_dlq.arn
         ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "cognito-idp:AdminAddUserToGroup",
+          "cognito-idp:AdminCreateUser",
+          "cognito-idp:AdminDisableUser",
+          "cognito-idp:AdminEnableUser",
+          "cognito-idp:AdminListGroupsForUser",
+          "cognito-idp:ListUsers"
+        ]
+        Resource = aws_cognito_user_pool.operators.arn
       }
     ]
   })

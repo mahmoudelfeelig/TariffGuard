@@ -1,5 +1,5 @@
-import { mockAlerts, mockAudit, mockOverview, mockSessions, mockTariffs, mockTariffVersions } from "../data/mockData";
-import type { AlertRecord, AuditSummary, Overview, SessionRow, TariffListItem, TariffVersion } from "./types";
+import { mockAlerts, mockAudit, mockOperators, mockOverview, mockSessions, mockTariffs, mockTariffVersions } from "../data/mockData";
+import type { AlertRecord, AuditSummary, CreatedOperator, Operator, Overview, SessionPage, SessionRow, TariffListItem, TariffVersion } from "./types";
 import { authExpiredEvent, getAccessToken } from "../auth";
 
 const useMocks = import.meta.env.VITE_USE_MOCKS === "true" || !import.meta.env.VITE_API_BASE_URL;
@@ -25,10 +25,11 @@ async function getJson<T>(path: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-async function authorizedFetch(url: string): Promise<Response> {
+async function authorizedFetch(url: string, init?: RequestInit): Promise<Response> {
   const accessToken = await getAccessToken();
-  const headers = accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined;
-  const response = await fetch(url, { headers });
+  const headers = new Headers(init?.headers);
+  if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
+  const response = await fetch(url, { ...init, headers });
   if (response.status === 401) {
     window.dispatchEvent(new Event(authExpiredEvent));
     throw new Error("Your session has expired. Sign in again.");
@@ -37,6 +38,33 @@ async function authorizedFetch(url: string): Promise<Response> {
     throw new Error("The API request limit was reached. Please retry shortly.");
   }
   return response;
+}
+
+async function sendJson<T>(path: string, body: unknown): Promise<T> {
+  const response = await authorizedFetch(`${apiBaseUrl}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as { message?: string };
+    throw new Error(payload.message || `Request failed with ${response.status}`);
+  }
+  return response.json() as Promise<T>;
+}
+
+export async function getSessions(cursor?: string, status?: string): Promise<SessionPage> {
+  if (useMocks) {
+    await delay();
+    const sessions = status && status !== "ALL"
+      ? mockSessions.filter((item) => item.status === status)
+      : mockSessions;
+    return { sessions, nextCursor: null, total: sessions.length };
+  }
+  const params = new URLSearchParams({ limit: "100" });
+  if (cursor) params.set("cursor", cursor);
+  if (status && status !== "ALL") params.set("status", status);
+  return getJson<SessionPage>(`/sessions?${params}`);
 }
 
 export async function getSession(sessionId: string): Promise<SessionRow> {
@@ -65,6 +93,48 @@ export async function getTariffVersions(tariffId: string): Promise<TariffVersion
   }
   const result = await getJson<{ versions: TariffVersion[] }>(`/tariffs/${encodeURIComponent(tariffId)}/versions`);
   return result.versions;
+}
+
+export async function createTariff(tariff: TariffVersion): Promise<TariffVersion> {
+  if (useMocks) {
+    await delay();
+    return tariff;
+  }
+  return sendJson<TariffVersion>("/tariffs", tariff);
+}
+
+export async function invalidateSession(sessionId: string, reason: string): Promise<SessionRow> {
+  if (useMocks) {
+    await delay();
+    const session = await getSession(sessionId);
+    return { ...session, status: "INVALIDATED", validationFlags: [...(session.validationFlags ?? []), { code: "MANUALLY_INVALIDATED", severity: "LOW", message: reason }] };
+  }
+  return sendJson<SessionRow>(`/sessions/${encodeURIComponent(sessionId)}/invalidate`, { reason });
+}
+
+export async function getOperators(): Promise<Operator[]> {
+  if (useMocks) {
+    await delay();
+    return mockOperators;
+  }
+  const result = await getJson<{ users: Operator[] }>("/admin/users");
+  return result.users;
+}
+
+export async function createOperator(email: string, role: "operator" | "admin"): Promise<CreatedOperator> {
+  if (useMocks) {
+    await delay();
+    return { username: `mock-${Date.now()}`, email, role, temporaryPassword: "Demo-Temporary9!" };
+  }
+  return sendJson<CreatedOperator>("/admin/users", { email, role });
+}
+
+export async function setOperatorEnabled(username: string, enabled: boolean): Promise<void> {
+  if (useMocks) {
+    await delay();
+    return;
+  }
+  await sendJson(`/admin/users/${encodeURIComponent(username)}/status`, { enabled });
 }
 
 export async function getAlerts(date: string): Promise<AlertRecord[]> {

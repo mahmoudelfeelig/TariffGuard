@@ -23,6 +23,9 @@ def process_session(store: DynamoRepository, session_id: str) -> None:
     item = store.get_session(session_id)
     if item is None:
         raise ValueError(f"session {session_id} not found")
+    if item.get("status") == "INVALIDATED":
+        log("session_validation_skipped", sessionId=session_id, reason="invalidated")
+        return
     ingest = SessionIngest.model_validate(item["rawPayload"])
     tariff = store.get_tariff_for_timestamp(ingest.tariffId, ingest.startedAt)
     flags = validate_session(ingest, tariff)

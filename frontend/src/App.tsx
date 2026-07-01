@@ -157,9 +157,7 @@ function StateFrame({
 function Brand() {
   return (
     <div className="flex items-center gap-3">
-      <div className="grid h-10 w-10 place-items-center overflow-hidden rounded bg-[#f4edf2]">
-        <img src={`${import.meta.env.BASE_URL}assets/brand/elephant-logo.png`} alt="" className="h-9 w-9 object-contain" />
-      </div>
+      <img src={`${import.meta.env.BASE_URL}assets/brand/elephant-logo.png`} alt="" className="h-10 w-10 object-contain" />
       <div>
         <p className="text-base font-semibold leading-5 text-white">TariffGuard</p>
         <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">EV operations</p>

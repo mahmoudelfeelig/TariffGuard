@@ -6,7 +6,12 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator
 
 SessionStatus = Literal[
-    "PENDING_VALIDATION", "VALIDATED", "FLAGGED", "REJECTED", "FAILED_PROCESSING"
+    "PENDING_VALIDATION",
+    "VALIDATED",
+    "FLAGGED",
+    "REJECTED",
+    "FAILED_PROCESSING",
+    "INVALIDATED",
 ]
 
 
