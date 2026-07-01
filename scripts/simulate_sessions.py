@@ -9,26 +9,49 @@ from decimal import Decimal
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+SCENARIOS_BY_SEVERITY = {
+    "VALID": ("VALID_AC", "VALID_DC"),
+    "LOW": ("LONG_SESSION",),
+    "MEDIUM": ("ZERO_ENERGY", "LONG_IDLE"),
+    "HIGH": (
+        "EXCESSIVE_ENERGY",
+        "SUSPICIOUS_POWER",
+        "METER_REVERSED",
+        "NEGATIVE_DURATION",
+        "MISSING_TARIFF",
+    ),
+}
 
-SCENARIOS = (
-    "VALID_AC",
-    "VALID_DC",
-    "ZERO_ENERGY",
-    "EXCESSIVE_ENERGY",
-    "SUSPICIOUS_POWER",
-    "LONG_IDLE",
-    "METER_REVERSED",
-    "NEGATIVE_DURATION",
-    "MISSING_TARIFF",
-)
+SEVERITY_WEIGHTS = {
+    "VALID": 75,
+    "LOW": 10,
+    "MEDIUM": 5,
+    "HIGH": 10,
+}
 
 
 def iso(value: datetime) -> str:
     return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
-def build_session(index: int, rng: random.Random, anchor: datetime) -> dict[str, object]:
-    scenario = SCENARIOS[index % len(SCENARIOS)]
+def severity_plan(count: int, rng: random.Random) -> list[str]:
+    return rng.choices(
+        tuple(SEVERITY_WEIGHTS),
+        weights=tuple(SEVERITY_WEIGHTS.values()),
+        k=count,
+    )
+
+
+def build_session(
+    index: int,
+    rng: random.Random,
+    anchor: datetime,
+    severity: str | None = None,
+) -> dict[str, object]:
+    severity = severity or rng.choices(
+        tuple(SEVERITY_WEIGHTS), weights=tuple(SEVERITY_WEIGHTS.values()), k=1
+    )[0]
+    scenario = rng.choice(SCENARIOS_BY_SEVERITY[severity])
     day_offset = index % 7
     started = (anchor - timedelta(days=day_offset)).replace(
         hour=rng.randint(5, 22), minute=rng.randint(0, 59), second=rng.randint(0, 59)
@@ -41,6 +64,9 @@ def build_session(index: int, rng: random.Random, anchor: datetime) -> dict[str,
     if scenario == "VALID_DC":
         duration = rng.randint(12, 55)
         energy = Decimal(str(round(rng.uniform(25, 95), 3)))
+    elif scenario == "LONG_SESSION":
+        duration = rng.randint(361, 540)
+        energy = Decimal(str(round(rng.uniform(20, 85), 3)))
     elif scenario == "ZERO_ENERGY":
         duration, energy = rng.randint(45, 180), Decimal("0")
     elif scenario == "EXCESSIVE_ENERGY":
@@ -60,7 +86,10 @@ def build_session(index: int, rng: random.Random, anchor: datetime) -> dict[str,
     meter_stop = meter_start + energy
     return {
         "sessionId": f"demo-{anchor:%Y%m%d%H%M}-{index:04d}-{scenario.lower()}",
-        "chargerId": f"DE-{rng.choice(('BER', 'HAM', 'MUC', 'FRA', 'CGN'))}-{rng.randint(1, 32):03d}",
+        "chargerId": (
+            f"DE-{rng.choice(('BER', 'HAM', 'MUC', 'FRA', 'CGN'))}-"
+            f"{rng.randint(1, 32):03d}"
+        ),
         "userId": f"driver-{rng.randint(1000, 1199)}",
         "startedAt": iso(started),
         "stoppedAt": iso(started + timedelta(minutes=duration)),
@@ -97,12 +126,13 @@ def main() -> None:
     args = parser.parse_args()
 
     rng = random.Random(args.seed)
+    severities = severity_plan(args.count, random.Random(args.seed + 1))
     anchor = datetime.now(UTC).replace(microsecond=0)
     counts: dict[int, int] = {}
     for index in range(args.count):
         status = post(
             f"{args.api_url.rstrip('/')}/sessions",
-            build_session(index, rng, anchor),
+            build_session(index, rng, anchor, severities[index]),
             args.access_token,
         )
         counts[status] = counts.get(status, 0) + 1

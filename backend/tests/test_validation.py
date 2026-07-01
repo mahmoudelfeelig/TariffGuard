@@ -69,6 +69,18 @@ def test_medium_validation_flags_are_flagged_not_rejected() -> None:
     assert status_from_flags(flags) == "FLAGGED"
 
 
+def test_long_session_has_low_severity_flag() -> None:
+    flags = validate_session(
+        session(stoppedAt="2026-06-30T14:01:00Z"),
+        tariff(),
+    )
+
+    assert [(flag.code, flag.severity) for flag in flags] == [
+        ("LONG_SESSION_DURATION", "LOW")
+    ]
+    assert status_from_flags(flags) == "FLAGGED"
+
+
 def test_duration_minutes_is_decimal_without_float_rounding() -> None:
     duration = duration_minutes("2026-06-30T08:00:00Z", "2026-06-30T08:00:00.100000Z")
 

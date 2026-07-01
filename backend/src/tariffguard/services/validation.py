@@ -105,6 +105,16 @@ def validate_session(session: SessionIngest, tariff: TariffVersion | None) -> li
                 str(session.idleMinutes),
             )
         )
+    if duration > 360:
+        flags.append(
+            _flag(
+                "LONG_SESSION_DURATION",
+                "LOW",
+                "Session duration is longer than six hours.",
+                False,
+                str(duration),
+            )
+        )
 
     return flags
 

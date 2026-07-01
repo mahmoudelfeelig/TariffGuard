@@ -335,12 +335,13 @@ python scripts/simulate_sessions.py `
   --count 500
 ```
 
-The simulator rotates through valid AC/DC charging, zero-energy sessions,
-excessive energy, implausible power, long idle time, reversed meters, invalid
-duration, and missing-tariff paths. Charger, driver, energy, timing, and idle
-values vary deterministically; `--seed` changes the generated dataset. The
-script paces requests below the default API rate limit and retries throttled or
-transient server responses.
+The simulator uses a weighted mix of approximately 75% valid sessions, 10%
+low-severity long sessions, 5% medium-severity zero-energy or long-idle
+sessions, and 10% high-severity energy, power, meter, duration, or tariff
+failures. Charger, driver, energy, timing, and idle values vary
+deterministically; `--seed` changes the generated dataset. The script paces
+requests below the default API rate limit and retries throttled or transient
+server responses.
 
 ## API Examples
 
