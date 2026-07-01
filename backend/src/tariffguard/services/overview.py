@@ -8,7 +8,8 @@ from typing import Any
 def build_overview(sessions: list[dict[str, Any]], alerts: list[dict[str, Any]]) -> dict[str, Any]:
     counts = Counter(session.get("status", "UNKNOWN") for session in sessions)
     revenue = sum(
-        Decimal(str(session.get("price", {}).get("displayTotal", "0"))) for session in sessions
+        Decimal(str((session.get("price") or {}).get("displayTotal", "0")))
+        for session in sessions
     )
     alert_counts = Counter(alert.get("flagCode", "UNKNOWN") for alert in alerts)
     trend = [
